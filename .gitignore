@@ -1,0 +1,24 @@
+﻿# Test engagement-lər (real müştəri adları olmamalıdır)
+test-eng/
+acme-test/
+*/scope.json
+*/report.html
+*/report.sarif
+*/osint_*.json
+*/all_subs_*.txt
+*/logs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp

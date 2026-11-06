@@ -1,0 +1,23 @@
+﻿
+---
+
+## 📋 Nə Dəyişdi?
+
+| Bölmə | Əvvəl | İndi |
+|-------|-------|------|
+| **Başlıq** | "HTML hesabat" | "HTML/SARIF hesabat" |
+| **2.7 SARIF export** | ❌ Yoxdur | ✅ Yeni bölmə |
+| **3. Interaktiv shell** | `report`-dan sonra bitir | `export-sarif` əlavə olundu |
+| **4. Komandalar cədvəli** | 8 komanda | 9 komanda (`export-sarif`) |
+| **5. v3.0 dəyişiklikləri** | SARIF yoxdur | ✅ SARIF export əlavə olundu |
+| **6. Fayl strukturu** | `README-v3.0.md` | `README 3.0.md` + `LICENSE` + `.gitignore` + `report.sarif` |
+| **9. Lisenziya** | "saxlanılmalıdır" | ✅ `LICENSE` faylına istinad |
+
+---
+
+## 🚀 Necə Yapışdırmaq
+
+### PowerShell:
+
+```powershell
+notepad "README 3.0.md"
