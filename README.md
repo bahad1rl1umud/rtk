@@ -13,12 +13,11 @@
 
 ## 1. Quraşdırma
 
-```bash
-git clone https://github.com/USER/rtk.git
-cd rtk
-python --version
-```
+Layihəni GitHub-dan klonlayın və qovluğa daxil olun:
 
+```bash
+git clone https://github.com/bahad1rl1umud/rtk.git
+cd rtk
 Python 3.8 və daha yeni versiya kifayətdir. Əsas CLI və hesabat modulları üçün əlavə Python paketi lazım deyil.
 
 ### Aktiv recon alətləri (opsional)
