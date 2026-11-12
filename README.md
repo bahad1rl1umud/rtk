@@ -18,6 +18,8 @@ Layihəni GitHub-dan klonlayın və qovluğa daxil olun:
 ```bash
 git clone https://github.com/bahad1rl1umud/rtk.git
 cd rtk
+```
+
 Python 3.8 və daha yeni versiya kifayətdir. Əsas CLI və hesabat modulları üçün əlavə Python paketi lazım deyil.
 
 ### Aktiv recon alətləri (opsional)
@@ -95,7 +97,7 @@ python rtk-v3.0.py recon -e acme-test -t example.com --content-scan \
   --wordlist /usr/share/seclists/Discovery/Web-Content/raft-medium-words.txt
 ```
 
-RTK subdomain nəticələrini scope ilə yenidən yoxlayır və scope xaricində olan hostları aktiv mərhələlərə ötürmür. `httpx`, `nuclei` və `feroxbuster` quraşdırılmayıbsa, uyğun mərhələ xəbərdarlıqla ötürülür. Alətlərin stdout/stderr və exit status məlumatları `logs/` qovluğunda saxlanılır.
+RTK subdomain nəticələrini scope ilə yenidən yoxlayır və scope xaricində olan hostları aktiv mərhələlərə ötürmür. `httpx`, `nuclei` və `feroxbuster` quraşdırılmayıbsa, uyğun mərhələ xəbərdarlıqla ötürülür. `--content-scan` üçün göstərilən wordlist mövcud deyilsə, content discovery xəbərdarlıqla keçilir. Alətlərin stdout/stderr və exit status məlumatları `logs/` qovluğunda saxlanılır.
 
 ### 2.4 Finding əlavə et
 
@@ -110,7 +112,7 @@ python rtk-v3.0.py finding -e acme-test \
   --av N --ac L --pr N --ui N --s U --c L --i L --a N
 ```
 
-CVSS metric-ləri sübutlara əsasən seçilməlidir. Default dəyərlər yalnız başlanğıc üçündür; real təsir araşdırılmadan severity-ni qəbul etməyin. Finding hədəfinin host hissəsi Scope Guard-dan keçməlidir.
+CVSS metric-ləri sübutlara əsasən seçilməlidir. `--c`, `--i`, `--a` verilməzsə avtomatik `N` qəbul edilir və finding `NONE` (0.0) olur — yəni sübutsuz finding yüksək bal almır. `--impact` boş qalarsa RTK xəbərdarlıq göstərir. Finding hədəfinin host hissəsi Scope Guard-dan keçməlidir.
 
 ### 2.5 Finding-ləri idarə et
 
@@ -134,7 +136,7 @@ Dəstəklənən statuslar: `Open`, `In Progress`, `Fixed`, `Accepted Risk`, `Fal
 python rtk-v3.0.py report -e acme-test
 ```
 
-`<engagement>/report.html` yaradılır. Hesabata severity sayları, CVSS balı, status, target və kliklənəndə açılan Impact/Fix/PoC/Evidence detalları daxildir.
+`<engagement>/report.html` yaradılır. Hesabata severity sayları, CVSS balı, status, target və kliklənəndə açılan Impact/Fix/PoC/Evidence detalları daxildir. Severity kartları yalnız açıq finding-ləri sayır; `Fixed` və `False Positive` sətirlər solğun göstərilir və başlıqda "açıq / bağlı" bölgüsü verilir.
 
 ### 2.7 SARIF export
 
@@ -171,7 +173,7 @@ rtk(acme-test) > export-sarif
 rtk(acme-test) > exit
 ```
 
-`use <engagement>` əvvəl yaradılmış engagement-i aktiv edir. Aktiv engagement seçildikdə `-e` parametrini yazmaq məcburi deyil. `help`, `clear` və `exit` komandaları mövcuddur. Shell daxilində arqumentlər dırnaq işarələri ilə verilə bilər.
+`use <engagement>` əvvəl yaradılmış engagement-i aktiv edir. Aktiv engagement seçildikdə `-e` parametrini yazmaq məcburi deyil. `help`, `clear` və `exit` komandaları mövcuddur. Shell daxilində arqumentlər dırnaq işarələri ilə verilə bilər; Windows yolları (`C:\...`) backslash itkisi olmadan qəbul edilir.
 
 ## 4. Komandaların xülasəsi
 
@@ -198,6 +200,9 @@ rtk(acme-test) > exit
 - **SARIF export:** SARIF 2.1.0 formatı — GitHub Security, VS Code və CI/CD inteqrasiyası üçün.
 - **Interaktiv shell:** `use`, `help`, `clear`, `exit` və arqumentlər üçün `shlex`.
 - **Mənbə xətaları:** OSINT mənbələrindən biri uğursuz olsa, digər mənbələr davam edə bilir.
+- **Etibarlılıq düzəlişləri:** `--c/--i/--a` verilmədikdə `N` qəbul edilir (sübutsuz finding yüksək bal almır), hesabat kartları yalnız açıq finding-ləri sayır, boş/yanlış `score` dəyəri olan köhnə finding-lər hesabatı sındırmır.
+- **Windows dəstəyi:** interaktiv shell-də `C:\...` yolları və dırnaqlı arqumentlər düzgün parse olunur.
+- **Təmizlik:** istifadə olunmayan `--banner` bayrağı və əlaqəli ölü kod silinib; xarici mənbələrdən gələn mətnlər terminala yazılmazdan əvvəl idarəetmə simvollarından təmizlənir; recon dövründə `scope.json` yalnız bir dəfə oxunur.
 
 ## 6. Fayl strukturu
 
@@ -205,7 +210,7 @@ rtk(acme-test) > exit
 rtk-v3.0/
 ├── .gitignore
 ├── LICENSE
-├── README 3.0.md
+├── README.md
 ├── rtk-v3.0.py
 └── acme-test/
     ├── scope.json

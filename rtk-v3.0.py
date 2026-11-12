@@ -26,6 +26,7 @@ VERSION = "3.0.0"
 USER_AGENT = {"User-Agent": f"RTK/{VERSION} (authorized-security-assessment)"}
 SESSION = {"eng": None}
 STATUSES = ("Open", "In Progress", "Fixed", "Accepted Risk", "False Positive")
+CLOSED_STATUSES = ("Fixed", "False Positive")
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "NONE")
 COLORS = {"r": "\033[31m", "g": "\033[32m", "y": "\033[33m", "b": "\033[34m", "m": "\033[35m", "c": "\033[36m", "0": "\033[0m", "bold": "\033[1m"}
 
@@ -49,6 +50,22 @@ BANNER = f"""{COLORS['r']}{COLORS['bold']}
 
 def p(message, color="c"):
     print(f"{COLORS.get(color, '')}{message}{COLORS['0']}")
+
+
+_CTRL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def clean(text, limit=400):
+    """Neutralize control characters in third-party strings before printing them."""
+    return _CTRL.sub("?", str(text))[:limit]
+
+
+def split_line(line):
+    """Shell splitter that keeps Windows paths intact (POSIX shlex consumes backslashes)."""
+    if os.name == "nt":
+        # Doubling makes shlex emit each separator literally; quoting still works.
+        return shlex.split(line.replace("\\", "\\\\"))
+    return shlex.split(line)
 
 
 def now_iso():
@@ -171,8 +188,7 @@ def cmd_init(args):
             normalized.append(str(ipaddress.ip_network(item, strict=False)))
         except ValueError:
             normalized.append(normalize_host(item))
-    if len(set(normalized)) != len(normalized):
-        normalized = list(dict.fromkeys(normalized))
+    normalized = list(dict.fromkeys(normalized))
     path.mkdir(parents=False, exist_ok=True)
     scope_file = path / "scope.json"
     if scope_file.exists() and not args.force:
@@ -285,9 +301,10 @@ def cmd_osint(args):
         interesting = [u for u in urls if any(k in u.lower() for k in (".git", ".env", "admin", "backup", "config", "dump", "sql", "log"))]
         if interesting:
             p(f"[i] Yoxlanmalı köhnə URL-lər ({len(interesting)}):", "y")
-            for item in interesting[:15]: print("    " + item)
+            for item in interesting[:15]:
+                print("    " + clean(item))
     for link in data.get("linkedin", {}).get("employees_dorks", []):
-        print("    " + link)
+        print("    " + clean(link))
 
 
 def run_tool(argv, logfile, timeout=900):
@@ -321,6 +338,7 @@ def run_tool(argv, logfile, timeout=900):
 def cmd_recon(args):
     eng = engagement_path(args.eng)
     target = guard(args.target, args.eng)
+    scope = load_meta(args.eng)["scope"]
     log_dir = eng / "logs"
     log_dir.mkdir(exist_ok=True)
     p(f"[*] Recon başlayır: {target}", "m")
@@ -339,7 +357,7 @@ def cmd_recon(args):
     for item in subs:
         try:
             host = normalize_host(item)
-            if in_scope(host, load_meta(args.eng)["scope"]): safe.add(host)
+            if in_scope(host, scope): safe.add(host)
         except ValueError:
             continue
     removed = len(subs) - len(safe)
@@ -352,8 +370,10 @@ def cmd_recon(args):
         run_tool(["nuclei", "-l", str(sub_file), "-t", "exposures/", "-severity", "medium,high,critical", "-rl", str(args.rate_limit), "-silent"], log_dir / f"nuclei_{target}.log", args.timeout)
         if args.content_scan:
             # Content discovery is opt-in and runs only on the explicitly scoped base host.
-            wordlist = args.wordlist
-            run_tool(["feroxbuster", "-u", f"https://{target}", "-w", wordlist, "-x", "php,asp,jsp,json,html", "--depth", "2", "--rate-limit", str(args.rate_limit), "--quiet"], log_dir / f"content_{target}.log", args.timeout)
+            if not Path(args.wordlist).is_file():
+                p(f"[!] Wordlist tapılmadı: {args.wordlist}; content scan keçildi", "y")
+            else:
+                run_tool(["feroxbuster", "-u", f"https://{target}", "-w", args.wordlist, "-x", "php,asp,jsp,json,html", "--depth", "2", "--rate-limit", str(args.rate_limit), "--quiet"], log_dir / f"content_{target}.log", args.timeout)
     else:
         p("[!] Scope daxilində host tapılmadı; aktiv alətlər başladılmadı", "y")
     p(f"[*] Recon tamamlandı. Log qovluğu: {log_dir}/", "g")
@@ -396,13 +416,28 @@ def severity(score):
     return "NONE" if score == 0 else "CRITICAL" if score >= 9 else "HIGH" if score >= 7 else "MEDIUM" if score >= 4 else "LOW"
 
 
+def score_value(finding):
+    """Sort key that tolerates legacy findings without a numeric score."""
+    try:
+        return float(finding.get("score") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def cmd_add_finding(args):
     meta = load_meta(args.eng)
     # Validate the finding host against scope; URL paths are allowed, off-scope hosts are not.
     host = guard(args.target, args.eng)
-    metrics = {"av": args.av, "ac": args.ac, "pr": args.pr, "ui": args.ui, "s": args.s,
-               "c": args.c, "i": args.i, "a": args.a}
+    provided = {"av": args.av, "ac": args.ac, "pr": args.pr, "ui": args.ui, "s": args.s,
+                "c": args.c, "i": args.i, "a": args.a}
+    missing = [k.upper() for k, v in provided.items() if v is None]
+    # Impact metrics default to NONE, so an unassessed finding can never look severe.
+    metrics = {k: (v or "N") for k, v in provided.items()}
     score = cvss(metrics)
+    if missing:
+        p(f"[!] CVSS metric verilməyib ({', '.join(missing)}) → N qəbul edildi; bal: {score}", "y")
+    if score > 0 and not (args.impact or "").strip():
+        p("[!] --impact boşdur; təsir sübutsuz qeyd olunur", "y")
     finding = {"id": uuid.uuid4().hex[:8], "title": args.title.strip(), "target": args.target,
                "host": host, "cvss": {k: v.upper() for k, v in metrics.items()}, "score": score,
                "severity": severity(score), "status": "Open", "created": now_iso(),
@@ -420,7 +455,7 @@ def cmd_findings(args):
     if not findings:
         p("[i] Finding yoxdur / uyğun ID tapılmadı", "y"); return
     for f in findings:
-        print(f"[{f.get('id','legacy')}] {f.get('severity','?'):8} {f.get('score','?'):>4} | {f.get('status','Open'):15} | {f.get('title','Untitled')} | {f.get('target','')}")
+        print(f"[{f.get('id','legacy')}] {f.get('severity','?'):8} {score_value(f):>4} | {f.get('status','Open'):15} | {f.get('title','Untitled')} | {f.get('target','')}")
 
 
 def cmd_finding_update(args):
@@ -475,7 +510,7 @@ def cmd_export_sarif(args):
                 "driver": {
                     "name": "RTK",
                     "version": VERSION,
-                    "informationUri": "https://github.com/USER/rtk",
+                    "informationUri": "https://github.com/bahad1rl1umud/rtk",
                     "rules": [
                         {"id": f"RTK-{s}", "name": s,
                          "shortDescription": {"text": f"{s} severity finding"}}
@@ -493,18 +528,22 @@ def cmd_export_sarif(args):
 
 def cmd_report(args):
     meta = load_meta(args.eng)
-    findings = sorted(meta.get("findings", []), key=lambda f: float(f.get("score", 0)), reverse=True)
-    counts = {s: sum(1 for f in findings if f.get("severity") == s) for s in SEVERITIES}
+    findings = sorted(meta.get("findings", []), key=score_value, reverse=True)
+    active = [f for f in findings if f.get("status", "Open") not in CLOSED_STATUSES]
+    closed = len(findings) - len(active)
+    # Severity cards count only findings that still need attention.
+    counts = {s: sum(1 for f in active if f.get("severity") == s) for s in SEVERITIES}
     rows = []
     for index, finding in enumerate(findings, 1):
         sev = finding.get("severity", "NONE")
         color = {"CRITICAL":"#c0392b", "HIGH":"#e67e22", "MEDIUM":"#d4ac0d", "LOW":"#27ae60", "NONE":"#95a5a6"}.get(sev, "#95a5a6")
         detail = "<br>".join([f"<b>{label}:</b> {html.escape(str(finding.get(key) or '—'))}" for label, key in (("Impact","impact"),("Fix","fix"),("PoC","poc"),("Evidence","evidence"))])
-        rows.append(f"<tr class='main' onclick=\"this.nextElementSibling.classList.toggle('show')\"><td>{index}</td><td>{html.escape(str(finding.get('title','')))}</td><td><span class='sev' style='background:{color}'>{html.escape(sev)}</span></td><td>{finding.get('score',0)}</td><td>{html.escape(str(finding.get('status','Open')))}</td><td><code>{html.escape(str(finding.get('target','')))}</code></td></tr><tr class='detail'><td colspan='6'>{detail}</td></tr>")
+        row_class = "main closed" if finding.get("status", "Open") in CLOSED_STATUSES else "main"
+        rows.append(f"<tr class='{row_class}' onclick=\"this.nextElementSibling.classList.toggle('show')\"><td>{index}</td><td>{html.escape(str(finding.get('title','')))}</td><td><span class='sev' style='background:{color}'>{html.escape(sev)}</span></td><td>{score_value(finding)}</td><td>{html.escape(str(finding.get('status','Open')))}</td><td><code>{html.escape(str(finding.get('target','')))}</code></td></tr><tr class='detail'><td colspan='6'>{detail}</td></tr>")
     cards = "".join(f"<div class='card'><b>{counts[s]}</b><small>{s}</small></div>" for s in SEVERITIES)
     page = f"""<!doctype html><html lang='az'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>RTK {VERSION} Report</title><style>
-body{{font-family:system-ui,sans-serif;margin:32px;background:#0d1117;color:#c9d1d9}}h1{{color:#ff5555}}.cards{{display:flex;gap:12px;flex-wrap:wrap;margin:22px 0}}.card{{background:#161b22;padding:14px 22px;border-radius:9px;min-width:90px}}.card b{{display:block;font-size:25px}}.card small{{color:#8b949e}}table{{border-collapse:collapse;width:100%;margin-top:18px}}td,th{{border:1px solid #30363d;padding:10px;text-align:left}}th{{background:#21262d}}.main{{cursor:pointer}}.main:hover{{background:#1c2128}}.sev{{padding:3px 9px;border-radius:5px;color:#111;font-weight:700}}.detail{{display:none}}.detail.show{{display:table-row}}.detail td{{background:#161b22;line-height:1.8}}code{{color:#79c0ff}}footer{{color:#8b949e;margin-top:28px}}</style></head><body>
-<h1>RTK — {html.escape(str(meta.get('client','')))} Pentest Report</h1><p>Engagement: <b>{html.escape(str(meta.get('name','')))}</b> | Generated: {html.escape(now_iso())} | Scope: {html.escape(', '.join(meta.get('scope',[])))}</p>
+body{{font-family:system-ui,sans-serif;margin:32px;background:#0d1117;color:#c9d1d9}}h1{{color:#ff5555}}.cards{{display:flex;gap:12px;flex-wrap:wrap;margin:22px 0}}.card{{background:#161b22;padding:14px 22px;border-radius:9px;min-width:90px}}.card b{{display:block;font-size:25px}}.card small{{color:#8b949e}}table{{border-collapse:collapse;width:100%;margin-top:18px}}td,th{{border:1px solid #30363d;padding:10px;text-align:left}}th{{background:#21262d}}.main{{cursor:pointer}}.main:hover{{background:#1c2128}}.closed td{{opacity:.5}}.sev{{padding:3px 9px;border-radius:5px;color:#111;font-weight:700}}.detail{{display:none}}.detail.show{{display:table-row}}.detail td{{background:#161b22;line-height:1.8}}code{{color:#79c0ff}}footer{{color:#8b949e;margin-top:28px}}</style></head><body>
+<h1>RTK — {html.escape(str(meta.get('client','')))} Pentest Report</h1><p>Engagement: <b>{html.escape(str(meta.get('name','')))}</b> | Generated: {html.escape(now_iso())} | Scope: {html.escape(', '.join(meta.get('scope',[])))} | Findings: <b>{len(active)}</b> açıq / {closed} bağlı</p>
 <div class='cards'>{cards}</div><table><thead><tr><th>#</th><th>Finding</th><th>Severity</th><th>CVSS</th><th>Status</th><th>Target</th></tr></thead><tbody>{''.join(rows)}</tbody></table>
 <footer>RTK v{VERSION} · CVSS v3.1 Base Score · Yalnız yazılı icazəli təhlükəsizlik qiymətləndirmələri üçün</footer></body></html>"""
     out = engagement_path(args.eng) / "report.html"
@@ -514,7 +553,6 @@ body{{font-family:system-ui,sans-serif;margin:32px;background:#0d1117;color:#c9d
 
 def build_parser():
     parser = argparse.ArgumentParser(prog="rtk", description=f"Red Team Kit v{VERSION}")
-    parser.add_argument("--banner", action="store_true", help="əmrdən əvvəl banner göstər")
     sub = parser.add_subparsers(dest="command", required=True)
     init = sub.add_parser("init", help="engagement və scope yarat")
     init.add_argument("name"); init.add_argument("-c", "--client", required=True); init.add_argument("-t", "--targets", required=True)
@@ -536,7 +574,8 @@ def build_parser():
     finding.add_argument("--pr", choices=["N","L","H"], default="N"); finding.add_argument("--ui", choices=["N","R"], default="N")
     finding.add_argument("--s", choices=["U","C"], default="U", help="CVSS Scope: U|C")
     for metric in ("c", "i", "a"):
-        finding.add_argument(f"--{metric}", choices=["H","L","N"], default="L")
+        finding.add_argument(f"--{metric}", choices=["H","L","N"], default=None,
+                             help="verilməzsə N (təsir qeydə alınmayıb) qəbul edilir")
     finding.set_defaults(func=cmd_add_finding)
     listing = sub.add_parser("findings", help="finding-ləri siyahıla")
     listing.add_argument("-e", "--eng", default=None); listing.add_argument("--id", help="yalnız konkret finding ID")
@@ -545,7 +584,7 @@ def build_parser():
     update.add_argument("-e", "--eng", default=None); update.add_argument("--id", required=True); update.add_argument("--status", choices=STATUSES, required=True)
     update.set_defaults(func=cmd_finding_update)
     report = sub.add_parser("report", help="HTML hesabat yarat")
-    report.add_argument("-e", "--eng", default=None); report.set_defaults(func=cmd_report)    
+    report.add_argument("-e", "--eng", default=None); report.set_defaults(func=cmd_report)
     sarif = sub.add_parser("export-sarif", help="SARIF 2.1.0 formatında export (GitHub/VS Code)")
     sarif.add_argument("-e", "--eng", default=None)
     sarif.set_defaults(func=cmd_export_sarif)
@@ -572,7 +611,7 @@ def shell(parser):
         if line.lower() in ("clear", "cls"):
             os.system("cls" if os.name == "nt" else "clear"); continue
         try:
-            argv = shlex.split(line)
+            argv = split_line(line)
             if argv[0] == "use":
                 if len(argv) == 1: p(f"[*] Aktiv engagement: {SESSION['eng'] or '—'}")
                 else:
@@ -591,7 +630,7 @@ def main():
     if len(sys.argv) == 1:
         shell(parser); return
     args = parser.parse_args()
-    if args.banner: print(BANNER)
+    print(BANNER)
     try:
         dispatch(args)
     except KeyboardInterrupt:
